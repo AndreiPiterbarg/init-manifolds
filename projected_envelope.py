@@ -57,8 +57,7 @@ class EnvelopeResult:
 
 def project_to_2d(
     points_3d: np.ndarray,
-    center: Optional[np.ndarray] = None,
-    return_full: bool = True
+    center: Optional[np.ndarray] = None
 ) -> ProjectionResult:
     """
     Project 3D points onto a 2D plane using PCA.

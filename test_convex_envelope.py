@@ -146,18 +146,12 @@ class TestFitEnvelope:
         envelope = fit_envelope(points, coverage=1.0, include_origin=False)
         assert envelope.shape[0] == 3
 
-    def test_small_dataset_2_points(self):
-        """Should handle 2 points by creating a valid polygon."""
-        points = np.array([[0, 0], [1, 1]], dtype=float)
-        envelope = fit_envelope(points, include_origin=False)
-        assert envelope.shape[0] >= 3
-
-    def test_small_dataset_1_point(self):
-        """Should handle 1 point by creating a valid polygon."""
-        points = np.array([[2, 3]], dtype=float)
-        envelope = fit_envelope(points, include_origin=True)
-        assert envelope.shape[0] >= 3
-        assert contains(envelope, np.array([[0, 0]]))[0]
+    def test_small_dataset_raises(self):
+        """Should raise ValueError for < 3 points."""
+        with pytest.raises(ValueError):
+            fit_envelope(np.array([[0, 0], [1, 1]], dtype=float))
+        with pytest.raises(ValueError):
+            fit_envelope(np.array([[0, 0]], dtype=float))
 
     def test_invalid_coverage_raises(self):
         """Invalid coverage values should raise ValueError."""

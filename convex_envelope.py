@@ -15,7 +15,6 @@ import numpy as np
 from scipy.spatial import ConvexHull
 from sklearn.covariance import MinCovDet
 import matplotlib.pyplot as plt
-from matplotlib.patches import Polygon as MplPolygon
 
 
 # Numerical tolerance, for python calcs
@@ -108,30 +107,8 @@ def fit_envelope(
 
     n_points = len(points)
 
-    # Handle small datasets
     if n_points < 3:
-        if n_points == 0:
-            pts = np.array([[0, 0], [1, 0], [0, 1]], dtype=np.float64)
-        elif n_points == 1:
-            p = points[0]
-            offset = max(1.0, np.linalg.norm(p)) * 0.1
-            pts = np.vstack([
-                points,
-                [p[0] + offset, p[1]],
-                [p[0], p[1] + offset]
-            ])
-        else:  # n_points == 2
-            p1, p2 = points
-            perp = np.array([-(p2[1] - p1[1]), p2[0] - p1[0]])
-            perp = perp / (np.linalg.norm(perp) + 1e-10) * 0.1
-            pts = np.vstack([points, (p1 + p2) / 2 + perp])
-
-        if include_origin:
-            pts = np.vstack([pts, [[0.0, 0.0]]])
-
-        hull = ConvexHull(pts)
-        poly = pts[hull.vertices]
-        return _ensure_ccw(poly)
+        raise ValueError(f"Need at least 3 points, got {n_points}")
 
     n_keep = max(3, int(np.ceil(coverage * n_points)))
 
