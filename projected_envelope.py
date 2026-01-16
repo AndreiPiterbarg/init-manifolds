@@ -1,12 +1,11 @@
 """
-Projected Envelope Module
+Projected Envelope Module:
 
-Projects 3D point cloud data onto a 2D plane (via PCA) and computes
-a robust convex envelope that:
+Projects 3D point data onto a 2D plane (via PCA) and computes
+convex envelope that:
 - Contains the origin (zero point)
 - Contains approximately 95% of the data (outlier-robust)
 
-This is a prototype step before implementing full 3D surface envelopes.
 """
 
 from dataclasses import dataclass
