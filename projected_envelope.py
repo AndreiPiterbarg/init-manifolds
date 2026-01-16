@@ -24,20 +24,12 @@ class ProjectionResult:
     """
     Container for projection results and metadata.
 
-    Attributes
-    ----------
-    points_2d : np.ndarray, shape (N, 2)
-        Projected 2D coordinates
-    points_3d : np.ndarray, shape (N, 3)
-        Original 3D coordinates
-    polar_axis : np.ndarray, shape (3,)
-        The polar axis (normal to projection plane)
-    basis : np.ndarray, shape (2, 3)
-        Orthonormal basis vectors spanning the projection plane
-    center_3d : np.ndarray, shape (3,)
-        Center point used for projection (usually origin or centroid)
-    explained_variance_ratio : np.ndarray, shape (3,)
-        PCA explained variance ratios
+    points_2d : Projected 2D coordinates
+    points_3d : Original 3D coordinates
+    polar_axis : The polar axis (normal to projection plane)
+    basis : Orthonormal basis vectors spanning the projection plane
+    center_3d : Center point used for projection (usually origin or centroid)
+    explained_variance_ratio : PCA explained variance ratios
     """
     points_2d: np.ndarray
     points_3d: np.ndarray
@@ -52,16 +44,10 @@ class EnvelopeResult:
     """
     Container for the full envelope computation results.
 
-    Attributes
-    ----------
-    envelope_2d : np.ndarray, shape (M, 2)
-        Convex envelope vertices in 2D (CCW order)
-    envelope_3d : np.ndarray, shape (M, 3)
-        Envelope vertices lifted back to 3D (on the projection plane)
-    projection : ProjectionResult
-        Full projection information
-    stats : dict
-        Envelope statistics (coverage, area, etc.)
+    envelope_2d : Convex envelope vertices in 2D (CCW order)
+    envelope_3d : Envelope vertices lifted back to 3D (on the projection plane)
+    projection : Full projection information
+    stats : Envelope statistics (coverage, area, etc.)
     """
     envelope_2d: np.ndarray
     envelope_3d: np.ndarray
@@ -77,24 +63,10 @@ def project_to_2d(
     """
     Project 3D points onto a 2D plane using PCA.
 
-    The projection plane is spanned by the two principal components with
-    highest variance. The polar axis (normal to the plane) is the direction
-    of smallest variance.
+    The projection plane is spanned by the two principal components with highest variance. Thus components that best capture data spread. Preserves as much original info.
 
-    Parameters
-    ----------
-    points_3d : np.ndarray, shape (N, 3)
-        Input 3D points
-    center : np.ndarray, shape (3,), optional
-        Center point for projection. If None, uses the origin [0, 0, 0].
-        Points are translated so this becomes the origin in 2D.
-    return_full : bool
-        If True, return full ProjectionResult; if False, return just points_2d
+    The polar axis (normal to the plane) is the direction of smallest variance.
 
-    Returns
-    -------
-    ProjectionResult
-        Container with projected points and projection metadata
     """
     points_3d = np.asarray(points_3d, dtype=np.float64)
 
@@ -106,22 +78,14 @@ def project_to_2d(
     else:
         center = np.asarray(center, dtype=np.float64)
 
-    # Center the data at the specified point
     centered = points_3d - center
-
-    # Fit PCA to find principal directions
     pca = PCA(n_components=3)
     pca.fit(centered)
 
-    # The basis vectors for the 2D plane (first two principal components)
-    # These are rows of pca.components_
     basis = pca.components_[:2]  # Shape (2, 3)
 
-    # Polar axis is the third principal component (smallest variance)
     polar_axis = pca.components_[2]  # Shape (3,)
 
-    # Project points onto the 2D plane
-    # points_2d[i] = [dot(centered[i], basis[0]), dot(centered[i], basis[1])]
     points_2d = centered @ basis.T  # Shape (N, 2)
 
     return ProjectionResult(
@@ -140,18 +104,6 @@ def lift_to_3d(
 ) -> np.ndarray:
     """
     Lift 2D points back to 3D on the projection plane.
-
-    Parameters
-    ----------
-    points_2d : np.ndarray, shape (K, 2)
-        Points in 2D projection space
-    projection : ProjectionResult
-        Projection metadata from project_to_2d()
-
-    Returns
-    -------
-    np.ndarray, shape (K, 3)
-        Points in original 3D space (on the projection plane)
     """
     points_2d = np.atleast_2d(points_2d)
 
@@ -172,45 +124,21 @@ def fit_projected_envelope(
     center: Optional[np.ndarray] = None
 ) -> EnvelopeResult:
     """
-    Project 3D data to 2D and compute a robust convex envelope.
+    MAIN METHOD: Project 3D data to 2D and compute a robust convex envelope.
 
-    This is the main entry point. It:
     1. Projects 3D points onto the principal plane (via PCA)
     2. Computes a convex envelope containing ~coverage fraction of points
     3. Ensures the origin/center is inside the envelope
-
-    Parameters
-    ----------
-    points_3d : np.ndarray, shape (N, 3)
-        Input 3D point cloud
-    coverage : float
-        Fraction of points to include in envelope (default 0.95)
-    include_origin : bool
-        Whether to ensure origin is inside envelope (default True)
-    center : np.ndarray, shape (3,), optional
-        3D center point. If None, uses [0, 0, 0].
-        This point maps to (0, 0) in 2D and will be inside the envelope
-        if include_origin=True.
-
-    Returns
-    -------
-    EnvelopeResult
-        Container with envelope vertices (2D and 3D), projection info, and stats
     """
-    # Project to 2D
     projection = project_to_2d(points_3d, center=center)
 
-    # Fit envelope in 2D
     envelope_2d = fit_envelope(
         projection.points_2d,
         coverage=coverage,
         include_origin=include_origin
     )
 
-    # Lift envelope back to 3D
     envelope_3d = lift_to_3d(envelope_2d, projection)
-
-    # Compute stats
     stats = envelope_stats(envelope_2d, projection.points_2d)
 
     return EnvelopeResult(
@@ -230,17 +158,7 @@ def contains_projected(
 
     Projects the query points onto the same 2D plane and tests containment.
 
-    Parameters
-    ----------
-    result : EnvelopeResult
-        Result from fit_projected_envelope()
-    points_3d : np.ndarray, shape (K, 3)
-        3D points to test
 
-    Returns
-    -------
-    np.ndarray, shape (K,), dtype=bool
-        True if point projects inside the 2D envelope
     """
     points_3d = np.atleast_2d(points_3d)
 
@@ -257,20 +175,8 @@ def plot_projected_envelope(
     figsize: Tuple[int, int] = (14, 6)
 ) -> plt.Figure:
     """
-    Visualize the projected envelope in both 2D and 3D.
+    Helper to visualize the projected envelope in both 2D and 3D.
 
-    Parameters
-    ----------
-    result : EnvelopeResult
-        Result from fit_projected_envelope()
-    show_3d : bool
-        If True, show side-by-side 2D and 3D plots
-    figsize : tuple
-        Figure size
-
-    Returns
-    -------
-    matplotlib Figure
     """
     if show_3d:
         fig = plt.figure(figsize=figsize)
@@ -372,64 +278,3 @@ def _plot_3d(result: EnvelopeResult, ax: Axes3D) -> None:
     ax.set_zlabel('Z')
     ax.set_title('3D View with Projection Plane')
     ax.legend(loc='upper left', fontsize=8)
-
-
-if __name__ == "__main__":
-    # Demo: Generate 3D data and compute projected envelope
-    np.random.seed(42)
-
-    # Create a 3D point cloud - elongated ellipsoid with some outliers
-    n_main = 200
-    n_outliers = 10
-
-    # Main cluster: stretched along one axis
-    main_points = np.random.randn(n_main, 3)
-    main_points[:, 0] *= 3.0  # Stretch along x
-    main_points[:, 1] *= 2.0  # Medium along y
-    main_points[:, 2] *= 0.5  # Thin along z
-
-    # Add some rotation to make it interesting
-    theta = np.pi / 6
-    rotation = np.array([
-        [np.cos(theta), -np.sin(theta), 0],
-        [np.sin(theta), np.cos(theta), 0],
-        [0, 0, 1]
-    ])
-    main_points = main_points @ rotation.T
-
-    # Add outliers
-    outliers = np.random.randn(n_outliers, 3) * 0.5
-    outliers += np.array([[8, 8, 2], [-7, 5, -1], [6, -8, 1],
-                          [-8, -8, -2], [10, 0, 0], [0, 10, 1],
-                          [-5, -5, 3], [7, 7, -2], [-9, 3, 0], [4, -9, 1]])
-
-    all_points = np.vstack([main_points, outliers])
-
-    # Compute projected envelope
-    print("Computing projected envelope...")
-    result = fit_projected_envelope(
-        all_points,
-        coverage=0.95,
-        include_origin=True
-    )
-
-    # Print results
-    print("\n=== Projected Envelope Results ===")
-    print(f"Input: {len(all_points)} 3D points")
-    print(f"\nPCA Analysis:")
-    print(f"  Explained variance: {result.projection.explained_variance_ratio}")
-    print(f"  Polar axis: {result.projection.polar_axis}")
-    print(f"\nEnvelope Stats:")
-    for key, value in result.stats.items():
-        if key != 'centroid':
-            print(f"  {key}: {value}")
-
-    # Test containment of origin
-    origin_inside = contains_projected(result, np.array([[0, 0, 0]]))[0]
-    print(f"\nOrigin [0,0,0] inside envelope: {origin_inside}")
-
-    # Plot
-    fig = plot_projected_envelope(result, show_3d=True)
-    plt.savefig('projected_envelope_demo.png', dpi=150, bbox_inches='tight')
-    print("\nPlot saved to: projected_envelope_demo.png")
-    plt.show()
