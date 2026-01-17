@@ -136,7 +136,7 @@ def fit_envelope(
             indices = np.argsort(distances)[:n_keep]
             candidate_points = points[indices]
 
-    
+
     if include_origin:
         candidate_points = np.vstack([candidate_points, [[0.0, 0.0]]])
 
