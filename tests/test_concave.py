@@ -1,10 +1,11 @@
 """
-Unit tests for convex_envelope module.
+Unit tests for concave envelope module.
 """
 
 import numpy as np
 import pytest
-from convex_envelope import fit_envelope, contains, envelope_stats
+from src.envelope import fit_envelope, contains, envelope_stats
+from src.envelope.core.geometry import polygon_area
 
 
 class TestContains:
@@ -76,10 +77,9 @@ class TestFitEnvelope:
         env_100 = fit_envelope(points, coverage=1.0)
 
         # Higher coverage should give larger area (roughly)
-        from convex_envelope import _polygon_area
-        area_50 = _polygon_area(env_50)
-        area_95 = _polygon_area(env_95)
-        area_100 = _polygon_area(env_100)
+        area_50 = polygon_area(env_50)
+        area_95 = polygon_area(env_95)
+        area_100 = polygon_area(env_100)
 
         assert area_50 <= area_95 <= area_100
 

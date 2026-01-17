@@ -1,5 +1,5 @@
 """
-Edge case tests for convex envelope fitting.
+Edge case tests for envelope fitting.
 
 Tests cover:
 1. Extremely asymmetrical data (one wing 5x larger than the other)
@@ -11,8 +11,8 @@ Tests cover:
 import numpy as np
 import pytest
 import matplotlib.pyplot as plt
-from convex_envelope import fit_envelope, contains, envelope_stats, plot_envelope
-from projected_envelope import fit_projected_envelope
+from src.envelope import fit_envelope, contains, envelope_stats, plot_envelope
+from src.envelope import fit_projected_envelope
 
 
 class TestAsymmetricalData:
@@ -201,7 +201,7 @@ class TestNoDataNearOrigin:
 class TestEdgeCaseVisualizations:
     """Visualization tests for each edge case category."""
 
-    @pytest.mark.parametrize("show", [False])
+    @pytest.mark.parametrize("show", [True])
     def test_visualize_asymmetrical(self, show):
         """Visualize hourglass with origin at center, asymmetric wings."""
         np.random.seed(42)
@@ -227,7 +227,7 @@ class TestEdgeCaseVisualizations:
             plt.savefig("edge_case_asymmetrical.png", dpi=150, bbox_inches='tight')
         plt.close()
 
-    @pytest.mark.parametrize("show", [False])
+    @pytest.mark.parametrize("show", [True])
     def test_visualize_concave_toward_origin(self, show):
         """Visualize 270-degree horseshoe with opening facing origin."""
         np.random.seed(42)
@@ -253,7 +253,7 @@ class TestEdgeCaseVisualizations:
             plt.savefig("edge_case_concave_toward_origin.png", dpi=150, bbox_inches='tight')
         plt.close()
 
-    @pytest.mark.parametrize("show", [False])
+    @pytest.mark.parametrize("show", [True])
     def test_visualize_concave_perpendicular(self, show):
         """Visualize horseshoe with opening perpendicular to radial line."""
         np.random.seed(42)
@@ -279,7 +279,7 @@ class TestEdgeCaseVisualizations:
             plt.savefig("edge_case_concave_perpendicular.png", dpi=150, bbox_inches='tight')
         plt.close()
 
-    @pytest.mark.parametrize("show", [False])
+    @pytest.mark.parametrize("show", [True])
     def test_visualize_no_data_near_origin(self, show):
         """Visualize distant cluster with origin inclusion."""
         np.random.seed(42)

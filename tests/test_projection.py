@@ -1,10 +1,10 @@
 """
-Unit tests for projected_envelope module.
+Unit tests for projected envelope module.
 """
 
 import numpy as np
 import pytest
-from projected_envelope import (
+from src.envelope import (
     project_to_2d,
     lift_to_3d,
     fit_projected_envelope,

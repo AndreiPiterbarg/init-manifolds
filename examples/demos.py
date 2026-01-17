@@ -1,26 +1,51 @@
-from convex_envelope import fit_envelope, envelope_stats, plot_envelope
+"""
+Demo scripts for envelope fitting library.
+
+Run with:
+    python -m examples.demos
+or:
+    python examples/demos.py
+"""
+
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.spatial import ConvexHull
-from projected_envelope import fit_projected_envelope, contains_projected, plot_projected_envelope
 
-def test_convex_envelope():
+from src.envelope import (
+    fit_envelope,
+    envelope_stats,
+    plot_envelope,
+    fit_projected_envelope,
+    contains_projected,
+    plot_projected_envelope,
+)
+
+
+def demo_convex_envelope():
+    """Demo 2D envelope fitting with outlier robustness."""
+    print("=" * 50)
+    print("2D Convex Envelope Demo")
+    print("=" * 50)
 
     n_main = 95
     n_outliers = 5
 
     main_points = np.random.randn(n_main, 2) * 1.5 + [0.5, 0.5]
-    outliers = np.random.randn(n_outliers, 2) * 0.5 + [[10, 10], [-8, 5], [7, -9], [-10, -10], [12, 0]]
+    outliers = np.random.randn(n_outliers, 2) * 0.5 + [
+        [10, 10], [-8, 5], [7, -9], [-10, -10], [12, 0]
+    ]
     all_points = np.vstack([main_points, outliers])
 
     envelope = fit_envelope(all_points, coverage=0.95, include_origin=True)
 
     stats = envelope_stats(envelope, all_points)
-    print("Envelope Statistics:")
+    print("\nEnvelope Statistics:")
     for key, value in stats.items():
         print(f"  {key}: {value}")
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+    # Full convex hull for comparison
     full_hull = ConvexHull(np.vstack([all_points, [[0, 0]]]))
     full_poly = np.vstack([all_points, [[0, 0]]])[full_hull.vertices]
 
@@ -30,7 +55,13 @@ def test_convex_envelope():
     plt.tight_layout()
     plt.show()
 
-def test_projected_envelope():
+
+def demo_projected_envelope():
+    """Demo 3D to 2D projection with envelope fitting."""
+    print("=" * 50)
+    print("3D Projected Envelope Demo")
+    print("=" * 50)
+
     # Create a 3D point cloud - elongated ellipsoid with some outliers
     n_main = 200
     n_outliers = 10
@@ -52,14 +83,16 @@ def test_projected_envelope():
 
     # Add outliers
     outliers = np.random.randn(n_outliers, 3) * 0.5
-    outliers += np.array([[8, 8, 2], [-7, 5, -1], [6, -8, 1],
-                          [-8, -8, -2], [10, 0, 0], [0, 10, 1],
-                          [-5, -5, 3], [7, 7, -2], [-9, 3, 0], [4, -9, 1]])
+    outliers += np.array([
+        [8, 8, 2], [-7, 5, -1], [6, -8, 1],
+        [-8, -8, -2], [10, 0, 0], [0, 10, 1],
+        [-5, -5, 3], [7, 7, -2], [-9, 3, 0], [4, -9, 1]
+    ])
 
     all_points = np.vstack([main_points, outliers])
 
     # Compute projected envelope
-    print("Computing projected envelope...")
+    print("\nComputing projected envelope...")
     result = fit_projected_envelope(
         all_points,
         coverage=0.95,
@@ -87,6 +120,25 @@ def test_projected_envelope():
     print("\nPlot saved to: projected_envelope_demo.png")
     plt.show()
 
+
 if __name__ == "__main__":
-    #test_convex_envelope()
-    test_projected_envelope()
+    np.random.seed(42)  # For reproducibility
+
+    print("\nSelect demo to run:")
+    print("1. 2D Convex Envelope")
+    print("2. 3D Projected Envelope")
+    print("3. Both")
+
+    choice = input("\nEnter choice (1/2/3): ").strip()
+
+    if choice == "1":
+        demo_convex_envelope()
+    elif choice == "2":
+        demo_projected_envelope()
+    elif choice == "3":
+        demo_convex_envelope()
+        demo_projected_envelope()
+    else:
+        print("Running both demos by default...")
+        demo_convex_envelope()
+        demo_projected_envelope()
