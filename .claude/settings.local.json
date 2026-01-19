@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python -m pytest:*)"
+      "Bash(python -m pytest:*)",
+      "WebSearch",
+      "Bash(cd:*)",
+      "Bash(tree:*)",
+      "Bash(python:*)"
     ]
   }
 }

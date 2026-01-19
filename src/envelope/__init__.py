@@ -26,8 +26,15 @@ Example
 
 from .core.geometry import contains
 from .envelopes.concave import fit_envelope, envelope_stats
+from .envelopes.single_crossing import fit_single_crossing_envelope, single_crossing_stats, TrajectoryFunc
 from .projection.pca import ProjectionResult, project_to_2d, lift_to_3d
-from .projection.projected_envelope import EnvelopeResult, fit_projected_envelope, contains_projected
+from .projection.projected_envelope import (
+    EnvelopeResult,
+    SingleCrossingEnvelopeResult,
+    fit_projected_envelope,
+    fit_projected_single_crossing_envelope,
+    contains_projected
+)
 from .visualization.plotting import plot_envelope, plot_projected_envelope
 
 # For backward compatibility with internal imports
@@ -36,16 +43,22 @@ from .core.geometry import _polygon_area
 __all__ = [
     # Core geometry
     'contains',
-    # 2D envelope
+    # 2D envelope (concave/alpha shapes)
     'fit_envelope',
     'envelope_stats',
+    # 2D envelope (single-crossing/polar)
+    'fit_single_crossing_envelope',
+    'single_crossing_stats',
+    'TrajectoryFunc',
     # Projection
     'ProjectionResult',
     'project_to_2d',
     'lift_to_3d',
     # 3D envelope
     'EnvelopeResult',
+    'SingleCrossingEnvelopeResult',
     'fit_projected_envelope',
+    'fit_projected_single_crossing_envelope',
     'contains_projected',
     # Visualization
     'plot_envelope',
