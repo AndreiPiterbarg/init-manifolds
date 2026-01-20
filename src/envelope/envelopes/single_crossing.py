@@ -1,445 +1,64 @@
 """
 Single-Crossing Envelope Module
 
-Fits a star-shaped (single-crossing) envelope using polar coordinates.
-Radial trajectories from the origin cross the boundary exactly once,
-making this ideal for dumbbell-shaped or other star-shaped data.
+Fits a star-shaped envelope using polar coordinates.
+Radial trajectories from the origin cross the boundary exactly once.
 
-Features:
-- Robust outlier filtering using Minimum Covariance Determinant
-- Polar coordinate fitting with angular binning
-- Circular interpolation for sparse angular coverage
-- Gaussian smoothing with wrap-around for smooth boundaries
-- Optional validation for custom trajectory functions
+The algorithm:
+1. Use MCD to filter outliers and select coverage fraction of points
+2. Convert filtered points to polar coordinates from origin
+3. For each angular bin, take the maximum radius to ensure containment
+4. For empty angular bins, decay toward origin (not interpolate)
+
+Extensible to arbitrary trajectories via the trajectory_func parameter.
 """
 
-from typing import Callable, Optional, Tuple
 import numpy as np
-from scipy.ndimage import gaussian_filter1d
 from sklearn.covariance import MinCovDet
-from shapely.geometry import LineString, Polygon
+from typing import Optional, Callable, Tuple
 
-from ..core.geometry import ensure_ccw, contains
-
-
-# Type alias for trajectory functions: (angle, t) -> (x, y)
-TrajectoryFunc = Callable[[float, float], np.ndarray]
+from ..core.geometry import ensure_ccw, polygon_area, contains
 
 
-def _filter_outliers(
-    points: np.ndarray,
-    coverage: float
-) -> np.ndarray:
-    """
-    Filter outliers using Minimum Covariance Determinant.
-
-    Parameters
-    ----------
-    points : np.ndarray
-        Array of shape (N, 2) containing 2D points.
-    coverage : float
-        Target fraction of points to keep.
-
-    Returns
-    -------
-    np.ndarray
-        Filtered points of shape (M, 2) where M <= N.
-    """
-    n_points = len(points)
-    n_keep = max(3, int(np.ceil(coverage * n_points)))
-
-    if coverage >= 1.0 or n_keep >= n_points:
-        return points.copy()
-
-    try:
-        mcd = MinCovDet(support_fraction=min(0.9, max(0.5, coverage)))
-        mcd.fit(points)
-        mahal_dist = mcd.mahalanobis(points)
-        indices = np.argsort(mahal_dist)[:n_keep]
-        return points[indices]
-    except Exception:
-        # Fallback: use distance from centroid
-        centroid = np.mean(points, axis=0)
-        distances = np.linalg.norm(points - centroid, axis=1)
-        indices = np.argsort(distances)[:n_keep]
-        return points[indices]
-
-
-def _interpolate_empty_bins(
-    radii: np.ndarray,
-    valid_mask: np.ndarray,
-    max_gap_to_interpolate: int = 3
-) -> np.ndarray:
-    """
-    Interpolate small empty angular gaps; collapse large gaps toward origin.
-
-    For star-shaped envelopes, we only interpolate across small gaps (a few
-    missing bins). Large gaps indicate regions with no data support, so we
-    collapse the radius to near-zero to avoid covering empty space.
-
-    Parameters
-    ----------
-    radii : np.ndarray
-        Array of radii per angle bin.
-    valid_mask : np.ndarray
-        Boolean mask indicating which bins have valid data.
-    max_gap_to_interpolate : int
-        Maximum consecutive empty bins to interpolate. Larger gaps collapse
-        to near-zero radius. Default 3 (~15 degrees for 72 bins).
-
-    Returns
-    -------
-    np.ndarray
-        Radii with small gaps interpolated and large gaps collapsed.
-    """
-    if np.all(valid_mask):
-        return radii.copy()
-
-    if not np.any(valid_mask):
-        return np.zeros_like(radii)
-
-    n = len(radii)
-    result = radii.copy()
-
-    # Find contiguous runs of invalid bins (gaps)
-    # We need to handle circular wrapping
-    valid_indices = np.where(valid_mask)[0]
-
-    if len(valid_indices) == 0:
-        return np.zeros_like(radii)
-
-    # For each invalid bin, determine gap size and whether to interpolate
-    for idx in np.where(~valid_mask)[0]:
-        # Find nearest valid bin before and after (circular)
-        # Distance to each valid index (circular)
-        dists_forward = (valid_indices - idx) % n
-        dists_backward = (idx - valid_indices) % n
-
-        # Nearest valid bin in forward direction
-        forward_idx = valid_indices[np.argmin(dists_forward)]
-        forward_dist = np.min(dists_forward)
-
-        # Nearest valid bin in backward direction
-        backward_idx = valid_indices[np.argmin(dists_backward)]
-        backward_dist = np.min(dists_backward)
-
-        # Total gap size is the distance between the two nearest valid bins
-        gap_size = forward_dist + backward_dist
-
-        if gap_size <= max_gap_to_interpolate:
-            # Small gap: interpolate between neighbors
-            if forward_dist + backward_dist == 0:
-                result[idx] = radii[forward_idx]
-            else:
-                # Linear interpolation weighted by distance
-                w_backward = forward_dist / (forward_dist + backward_dist)
-                w_forward = backward_dist / (forward_dist + backward_dist)
-                result[idx] = w_backward * radii[backward_idx] + w_forward * radii[forward_idx]
-        else:
-            # Large gap: collapse toward origin (very small radius)
-            # Use a small fraction of the nearest valid radius to create a "pinch"
-            min_valid_radius = np.min(radii[valid_mask])
-            result[idx] = min_valid_radius * 0.01
-
-    return result
-
-
-def _circular_smooth(
-    radii: np.ndarray,
-    sigma: float
-) -> np.ndarray:
-    """
-    Apply Gaussian smoothing with circular (wrap) boundary conditions.
-
-    Parameters
-    ----------
-    radii : np.ndarray
-        Array of radii per angle bin.
-    sigma : float
-        Standard deviation for Gaussian kernel (in bin units).
-
-    Returns
-    -------
-    np.ndarray
-        Smoothed radii.
-    """
-    if sigma <= 0:
-        return radii.copy()
-
-    return gaussian_filter1d(radii, sigma=sigma, mode='wrap')
-
-
-def _adaptive_expand_for_coverage(
-    bin_radii: np.ndarray,
-    points: np.ndarray,
-    origin: np.ndarray,
-    n_angles: int,
-    target_coverage: float,
-    max_iterations: int = 50,
-    tolerance: float = 0.01
-) -> np.ndarray:
-    """
-    Adaptively expand radii per-direction to achieve target coverage.
-
-    Key insight: only expand in directions where data actually exists.
-    Empty angular regions should not be expanded, preventing "blobs"
-    in areas with no data.
-
-    Parameters
-    ----------
-    bin_radii : np.ndarray
-        Current radii per angular bin.
-    points : np.ndarray
-        Original points to test coverage against.
-    origin : np.ndarray
-        Origin point for polar coordinates.
-    n_angles : int
-        Number of angular bins.
-    target_coverage : float
-        Target fraction of points to contain.
-    max_iterations : int
-        Maximum iterations for expansion.
-    tolerance : float
-        Acceptable deviation from target coverage.
-
-    Returns
-    -------
-    np.ndarray
-        Expanded radii that achieve target coverage.
-    """
-    bin_angles = np.linspace(0, 2 * np.pi, n_angles, endpoint=False)
-    bin_width = 2 * np.pi / n_angles
-    result_radii = bin_radii.copy()
-
-    # Convert points to polar coordinates
-    centered = points - origin
-    point_radii = np.linalg.norm(centered, axis=1)
-    point_angles = np.arctan2(centered[:, 1], centered[:, 0])
-    point_angles = np.mod(point_angles, 2 * np.pi)
-    point_bins = np.floor(point_angles / bin_width).astype(int)
-    point_bins = np.clip(point_bins, 0, n_angles - 1)
-
-    # Identify which bins have actual data (not just interpolated)
-    # A bin "has data" if there are points within a few bins of it
-    data_density = np.zeros(n_angles)
-    neighbor_range = 3  # Look at neighboring bins too
-    for i in range(n_angles):
-        for offset in range(-neighbor_range, neighbor_range + 1):
-            neighbor_idx = (i + offset) % n_angles
-            data_density[i] += np.sum(point_bins == neighbor_idx)
-    has_nearby_data = data_density > 0
-
-    # Compute the max radius per bin from actual data
-    max_radius_per_bin = np.zeros(n_angles)
-    for i in range(n_angles):
-        bin_mask = point_bins == i
-        if np.any(bin_mask):
-            max_radius_per_bin[i] = np.max(point_radii[bin_mask])
-
-    def make_envelope(radii):
-        """Create envelope from radii."""
-        envelope_x = origin[0] + radii * np.cos(bin_angles)
-        envelope_y = origin[1] + radii * np.sin(bin_angles)
-        return np.column_stack([envelope_x, envelope_y])
-
-    def compute_coverage(radii):
-        """Compute coverage for given radii."""
-        envelope = make_envelope(radii)
-        inside = contains(envelope, points)
-        return np.mean(inside)
-
-    # Check initial coverage
-    current_cov = compute_coverage(result_radii)
-    if current_cov >= target_coverage - tolerance:
-        return result_radii
-
-    # Iteratively expand only in directions with data
-    for iteration in range(max_iterations):
-        envelope = make_envelope(result_radii)
-        inside = contains(envelope, points)
-        current_cov = np.mean(inside)
-
-        if current_cov >= target_coverage - tolerance:
-            break
-
-        # Find points that are outside
-        outside_mask = ~inside
-        if not np.any(outside_mask):
-            break
-
-        # For each outside point, expand its angular bin
-        outside_radii = point_radii[outside_mask]
-        outside_bins = point_bins[outside_mask]
-
-        # Only expand bins that have nearby data
-        for bin_idx in range(n_angles):
-            if not has_nearby_data[bin_idx]:
-                continue  # Skip bins with no nearby data
-
-            bin_mask = outside_bins == bin_idx
-            if np.any(bin_mask):
-                max_needed = np.max(outside_radii[bin_mask])
-                if max_needed > result_radii[bin_idx]:
-                    result_radii[bin_idx] = max_needed * 1.02
-
-    # Smooth only the data regions, keeping empty regions collapsed
-    # Apply smoothing but then restore collapsed regions
-    smoothed = gaussian_filter1d(result_radii, sigma=1.0, mode='wrap')
-
-    # Blend: use smoothed values where there's data, keep original where empty
-    # This prevents smoothing from spreading into empty regions
-    for i in range(n_angles):
-        if has_nearby_data[i]:
-            result_radii[i] = smoothed[i]
-        # else: keep the original (possibly collapsed) value
-
-    return result_radii
-
-
-def _validate_crossings(
-    envelope: np.ndarray,
-    origin: np.ndarray,
-    trajectory_func: TrajectoryFunc,
-    n_samples: int = 360
-) -> dict:
-    """
-    Validate that trajectories cross the envelope exactly once.
-
-    Parameters
-    ----------
-    envelope : np.ndarray
-        Envelope vertices of shape (M, 2).
-    origin : np.ndarray
-        Origin point of shape (2,).
-    trajectory_func : TrajectoryFunc
-        Function (angle, t) -> (x, y) defining the trajectory.
-    n_samples : int
-        Number of angles to sample for validation.
-
-    Returns
-    -------
-    dict
-        Validation results with keys:
-        - 'is_valid': bool, True if all trajectories cross exactly once
-        - 'failures': list of angles where crossing count != 1
-        - 'crossing_counts': dict mapping angle to crossing count
-    """
-    envelope_polygon = Polygon(envelope)
-    angles = np.linspace(0, 2 * np.pi, n_samples, endpoint=False)
-
-    failures = []
-    crossing_counts = {}
-
-    for angle in angles:
-        # Sample trajectory from t=0 (origin) to t=2 (well beyond envelope)
-        t_values = np.linspace(0, 2, 100)
-        trajectory_points = np.array([trajectory_func(angle, t) for t in t_values])
-        trajectory_line = LineString(trajectory_points)
-
-        # Count intersections with envelope boundary
-        intersection = trajectory_line.intersection(envelope_polygon.exterior)
-
-        if intersection.is_empty:
-            n_crossings = 0
-        elif intersection.geom_type == 'Point':
-            n_crossings = 1
-        elif intersection.geom_type == 'MultiPoint':
-            n_crossings = len(intersection.geoms)
-        else:
-            # LineString or other - count as multiple
-            n_crossings = 2
-
-        crossing_counts[float(angle)] = n_crossings
-
-        if n_crossings != 1:
-            failures.append(float(angle))
-
-    return {
-        'is_valid': len(failures) == 0,
-        'failures': failures,
-        'crossing_counts': crossing_counts
-    }
+# Type alias for trajectory functions
+# trajectory_func(angle, t) -> (x, y) where t in [0, 1], t=0 at infinity, t=1 at origin
+TrajectoryFunc = Callable[[float, float], Tuple[float, float]]
 
 
 def fit_single_crossing_envelope(
     points: np.ndarray,
     coverage: float = 0.95,
     n_angles: int = 72,
-    smoothing: float = 0.5,
-    percentile_per_angle: float = 95.0,
-    origin: np.ndarray = None,
-    trajectory_func: TrajectoryFunc = None,
-    n_validation_samples: int = 360,
-    max_gap_to_interpolate: int = None,
-    radius_expansion: float = 1.0,
-    target_coverage: float = None
+    origin: Optional[np.ndarray] = None,
+    trajectory_func: Optional[TrajectoryFunc] = None,
 ) -> Tuple[np.ndarray, Optional[dict]]:
     """
-    Fit a single-crossing (star-shaped) envelope using polar coordinates.
+    Fit a single-crossing (star-shaped) envelope around points.
 
-    The envelope is constructed such that radial trajectories from the origin
-    cross the boundary exactly once. This is achieved by fitting in polar
-    coordinates where r(theta) is single-valued.
+    For radial trajectories from origin, the envelope boundary is crossed
+    exactly once. This relaxes concavity while maintaining arbitrage-free
+    properties along specified trajectories.
 
     Parameters
     ----------
     points : np.ndarray
         Array of shape (N, 2) containing 2D points.
     coverage : float
-        Target fraction of points for outlier filtering (0, 1]. Default 0.95.
+        Target fraction of points for MCD outlier filtering (0, 1]. Default 0.95.
     n_angles : int
-        Number of angular bins. Default 72 (5-degree bins).
-    smoothing : float
-        Gaussian smoothing sigma in bin units. Default 0.5.
-        Set to 0 for no smoothing.
-    percentile_per_angle : float
-        Percentile of radius to use per angular bin. Default 95.0.
+        Number of angular bins for boundary estimation. Default 72 (5 deg bins).
     origin : np.ndarray, optional
-        Origin point for polar coordinates. Defaults to data centroid.
+        Origin point for polar coordinates. If None, uses [0, 0].
     trajectory_func : TrajectoryFunc, optional
-        Custom trajectory function (angle, t) -> (x, y).
-        If provided, validation is performed after fitting.
-    n_validation_samples : int
-        Number of angles for trajectory validation. Default 360.
-    max_gap_to_interpolate : int, optional
-        Maximum consecutive empty bins to interpolate. Larger gaps collapse
-        toward origin. Default is n_angles (always interpolate).
-    radius_expansion : float
-        Factor to expand radii after fitting. Use values > 1.0 to ensure
-        all points are contained (accounts for binning discretization).
-        Default 1.0 (no expansion).
-    target_coverage : float, optional
-        If set, adaptively expand the envelope until this fraction of the
-        ORIGINAL points (before MCD filtering) are contained. This ensures
-        smooth shapes while achieving desired coverage. Default None.
+        Custom trajectory function for validation. If provided, validates
+        that the envelope satisfies single-crossing for these trajectories.
 
     Returns
     -------
-    envelope : np.ndarray
-        Envelope vertices in CCW order, shape (M, 2).
+    poly : np.ndarray
+        Vertices of the envelope polygon in counter-clockwise order. Shape (M, 2).
     validation : dict or None
-        None for radial trajectories (default).
-        For custom trajectories: {'is_valid': bool, 'failures': list, 'crossing_counts': dict}
-
-    Raises
-    ------
-    ValueError
-        If points has wrong shape or coverage is out of range.
-
-    Examples
-    --------
-    >>> points = np.random.randn(100, 2)
-    >>> envelope, _ = fit_single_crossing_envelope(points)
-    >>> envelope.shape
-    (72, 2)
-
-    >>> # With custom trajectory validation
-    >>> def spiral(angle, t):
-    ...     r = t * (1 + 0.1 * np.sin(3 * angle))
-    ...     return np.array([r * np.cos(angle), r * np.sin(angle)])
-    >>> envelope, validation = fit_single_crossing_envelope(points, trajectory_func=spiral)
-    >>> validation['is_valid']
-    True
+        If trajectory_func provided, contains validation results.
     """
     points = np.asarray(points, dtype=np.float64)
 
@@ -450,129 +69,194 @@ def fit_single_crossing_envelope(
         raise ValueError(f"coverage must be in (0, 1], got {coverage}")
 
     n_points = len(points)
-
     if n_points < 3:
         raise ValueError(f"Need at least 3 points, got {n_points}")
 
-    # Set default for max_gap_to_interpolate (always interpolate by default)
-    if max_gap_to_interpolate is None:
-        max_gap_to_interpolate = n_angles  # Always interpolate, never collapse
-
-    # Step 1: Filter outliers
-    filtered_points = _filter_outliers(points, coverage)
-
-    # Step 2: Set origin to centroid if not provided
+    # Set origin
     if origin is None:
-        origin = np.mean(filtered_points, axis=0)
+        origin = np.array([0.0, 0.0])
     else:
         origin = np.asarray(origin, dtype=np.float64)
 
-    # Step 3: Convert to polar coordinates relative to origin
+    # Apply MCD filtering to select inlier points
+    n_keep = max(3, int(np.ceil(coverage * n_points)))
+    if coverage >= 1.0 or n_keep >= n_points:
+        filtered_points = points.copy()
+    else:
+        try:
+            mcd = MinCovDet(support_fraction=min(0.9, max(0.5, coverage)))
+            mcd.fit(points)
+            mahal_dist = mcd.mahalanobis(points)
+            indices = np.argsort(mahal_dist)[:n_keep]
+            filtered_points = points[indices]
+        except Exception:
+            # Fallback: use distance from centroid
+            centroid = np.mean(points, axis=0)
+            distances = np.linalg.norm(points - centroid, axis=1)
+            indices = np.argsort(distances)[:n_keep]
+            filtered_points = points[indices]
+
+    # Translate points relative to origin
     centered = filtered_points - origin
-    radii = np.linalg.norm(centered, axis=1)
-    angles = np.arctan2(centered[:, 1], centered[:, 0])
-    # Normalize angles to [0, 2*pi)
-    angles = np.mod(angles, 2 * np.pi)
 
-    # Step 4: Bin into angular bins
-    bin_width = 2 * np.pi / n_angles
-    bin_indices = np.floor(angles / bin_width).astype(int)
-    bin_indices = np.clip(bin_indices, 0, n_angles - 1)
+    r = np.linalg.norm(centered, axis=1)
+    theta = np.arctan2(centered[:, 1], centered[:, 0])
 
-    # Step 5: Compute percentile radius per bin
-    bin_radii = np.zeros(n_angles)
-    valid_mask = np.zeros(n_angles, dtype=bool)
+
+    valid = r > 1e-10
+    r = r[valid]
+    theta = theta[valid]
+
+    if len(r) < 3:
+        raise ValueError("Not enough non-origin points")
+
+    angle_bins = np.linspace(-np.pi, np.pi, n_angles + 1)
+    angle_centers = 0.5 * (angle_bins[:-1] + angle_bins[1:])
+    boundary_radii = np.zeros(n_angles)
 
     for i in range(n_angles):
-        mask = bin_indices == i
-        if np.any(mask):
-            bin_radii[i] = np.percentile(radii[mask], percentile_per_angle)
-            valid_mask[i] = True
+        in_bin = (theta >= angle_bins[i]) & (theta < angle_bins[i + 1])
+        if np.sum(in_bin) > 0:
+            boundary_radii[i] = np.max(r[in_bin])
+        else:
+            boundary_radii[i] = np.nan
 
-    # Step 6: Interpolate empty bins
-    bin_radii = _interpolate_empty_bins(bin_radii, valid_mask, max_gap_to_interpolate)
-
-    # Step 7: Apply circular Gaussian smoothing
-    smoothing_sigma = smoothing * (n_angles / 72)  # Scale sigma with bin count
-    bin_radii = _circular_smooth(bin_radii, smoothing_sigma)
-
-    # Step 7b: Apply radius expansion if requested
-    if radius_expansion != 1.0:
-        bin_radii = bin_radii * radius_expansion
-
-    # Step 7c: Adaptive expansion to achieve target coverage
-    if target_coverage is not None:
-        bin_radii = _adaptive_expand_for_coverage(
-            bin_radii, points, origin, n_angles, target_coverage
-        )
-
-    # Step 8: Convert back to Cartesian
-    bin_angles = np.linspace(0, 2 * np.pi, n_angles, endpoint=False)
-    envelope_x = origin[0] + bin_radii * np.cos(bin_angles)
-    envelope_y = origin[1] + bin_radii * np.sin(bin_angles)
-    envelope = np.column_stack([envelope_x, envelope_y])
-
-    # Step 9: Validate if custom trajectory provided
+    boundary_radii = _fill_gaps_with_decay(boundary_radii)
+    x = boundary_radii * np.cos(angle_centers) + origin[0]
+    y = boundary_radii * np.sin(angle_centers) + origin[1]
+    poly = np.column_stack([x, y])
+    poly = ensure_ccw(poly)
     validation = None
     if trajectory_func is not None:
-        validation = _validate_crossings(
-            envelope, origin, trajectory_func, n_validation_samples
-        )
+        validation = _validate_trajectories(poly, trajectory_func, n_angles, origin)
 
-    # Step 10: Ensure CCW ordering and return
-    envelope = ensure_ccw(envelope)
-
-    return envelope, validation
+    return poly, validation
 
 
-def single_crossing_stats(
-    envelope: np.ndarray,
-    points: np.ndarray,
-    origin: np.ndarray = None
+def _fill_gaps_with_decay(radii: np.ndarray, decay_scale: int = 3) -> np.ndarray:
+    """
+    Fill NaN values using exponential decay toward origin for large gaps.
+
+    For small gaps (few empty bins), interpolate between neighbors.
+    For large gaps, decay the radius toward a minimum value as distance
+    from data increases. This prevents the envelope from bulging into
+    empty angular regions.
+    """
+    n = len(radii)
+    result = radii.copy()
+    nan_mask = np.isnan(result)
+
+    if nan_mask.all():
+        raise ValueError("No valid radii in any angular bin")
+
+    if not nan_mask.any():
+        return result
+
+    valid_idx = np.where(~nan_mask)[0]
+
+    # Use minimum valid radius as the floor to decay toward
+    min_valid = np.nanmin(result)
+    floor_radius = min_valid * 0.05
+
+    # Handle case with only one valid value
+    if len(valid_idx) == 1:
+        # Decay from the single valid point
+        single_idx = valid_idx[0]
+        single_val = result[single_idx]
+        for i in range(n):
+            if i != single_idx:
+                dist = min(abs(i - single_idx), n - abs(i - single_idx))
+                decay = np.exp(-dist / decay_scale)
+                result[i] = single_val * decay + floor_radius * (1 - decay)
+        return result
+
+    # For each NaN, compute distance to nearest valid bin and decay
+    for i in np.where(nan_mask)[0]:
+        # Find distance to nearest valid bin (circular)
+        dists_forward = (valid_idx - i) % n
+        dists_backward = (i - valid_idx) % n
+        dists = np.minimum(dists_forward, dists_backward)
+
+        min_dist = np.min(dists)
+        nearest_idx = valid_idx[np.argmin(dists)]
+        nearest_val = result[nearest_idx]
+
+        # Exponential decay: close to data = use data radius, far from data = use floor
+        decay = np.exp(-min_dist / decay_scale)
+        result[i] = nearest_val * decay + floor_radius * (1 - decay)
+
+    return result
+
+
+def _validate_trajectories(
+    poly: np.ndarray,
+    trajectory_func: TrajectoryFunc,
+    n_test_angles: int,
+    origin: np.ndarray
 ) -> dict:
+    """Validate that trajectories cross the boundary exactly once."""
+    from shapely.geometry import Polygon, LineString
+
+    shapely_poly = Polygon(poly)
+    test_angles = np.linspace(-np.pi, np.pi, n_test_angles, endpoint=False)
+
+    crossings = []
+    for angle in test_angles:
+        # Sample trajectory from far out to origin
+        t_vals = np.linspace(0, 1, 100)
+        traj_points = [trajectory_func(angle, t) for t in t_vals]
+        traj_line = LineString(traj_points)
+
+        intersection = shapely_poly.exterior.intersection(traj_line)
+        n_crossings = len(intersection.geoms) if hasattr(intersection, 'geoms') else (
+            1 if not intersection.is_empty else 0
+        )
+        crossings.append(n_crossings)
+
+    crossings = np.array(crossings)
+    return {
+        'all_single_crossing': bool(np.all(crossings == 1)),
+        'crossing_counts': crossings,
+        'min_crossings': int(np.min(crossings)),
+        'max_crossings': int(np.max(crossings)),
+    }
+
+
+def single_crossing_stats(poly: np.ndarray, points: np.ndarray) -> dict:
     """
     Compute diagnostic statistics for a single-crossing envelope.
 
     Parameters
     ----------
-    envelope : np.ndarray
-        Envelope vertices of shape (M, 2).
+    poly : np.ndarray
+        Polygon vertices of shape (M, 2).
     points : np.ndarray
         Data points of shape (N, 2).
-    origin : np.ndarray, optional
-        Origin used for fitting. Defaults to envelope centroid.
 
     Returns
     -------
     dict
-        Statistics including:
-        - 'fraction_contained': Fraction of points inside envelope
-        - 'origin_inside': Whether origin is inside
-        - 'num_vertices': Number of envelope vertices
-        - 'mean_radius': Mean radius from origin
-        - 'radius_std': Standard deviation of radius
-        - 'points_inside': Count of points inside
-        - 'points_outside': Count of points outside
+        Statistics including fraction_contained, origin_inside, num_vertices,
+        area, and star-shaped verification.
     """
     points = np.atleast_2d(points)
-
-    if origin is None:
-        origin = np.mean(envelope, axis=0)
-
-    inside_mask = contains(envelope, points)
+    inside_mask = contains(poly, points)
     fraction = np.mean(inside_mask)
-    origin_inside = bool(contains(envelope, origin.reshape(1, -1))[0])
-
-    # Compute radii from origin to envelope vertices
-    envelope_centered = envelope - origin
-    radii = np.linalg.norm(envelope_centered, axis=1)
+    origin_inside = bool(contains(poly, np.array([[0.0, 0.0]]))[0])
+    area = polygon_area(poly)
 
     return {
         'fraction_contained': float(fraction),
         'origin_inside': origin_inside,
-        'num_vertices': len(envelope),
-        'mean_radius': float(np.mean(radii)),
-        'radius_std': float(np.std(radii)),
+        'num_vertices': len(poly),
+        'area': float(area),
         'points_inside': int(np.sum(inside_mask)),
         'points_outside': int(np.sum(~inside_mask)),
+        'is_star_shaped': _verify_star_shaped(poly),
     }
+
+
+def _verify_star_shaped(poly: np.ndarray) -> bool:
+    """Check if polygon is star-shaped from origin (all radii positive)."""
+    r = np.linalg.norm(poly, axis=1)
+    return bool(np.all(r > 0))

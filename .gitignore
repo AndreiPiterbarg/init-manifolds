@@ -2,7 +2,8 @@
 __pycache__/
 *.py[codz]
 *$py.class
-
+Plan.md
+Claude.md
 .claude
 # C extensions
 *.so

@@ -132,7 +132,6 @@ def fit_projected_single_crossing_envelope(
 
     This fits a star-shaped envelope using polar coordinates, guaranteeing
     that radial trajectories from the origin cross the boundary exactly once.
-    Ideal for dumbbell-shaped or other star-shaped data.
 
     Parameters
     ----------
@@ -164,7 +163,6 @@ def fit_projected_single_crossing_envelope(
         n_angles=n_angles,
         smoothing=smoothing,
         percentile_per_angle=percentile_per_angle,
-        origin=None,  # Use centroid of projected points
         trajectory_func=trajectory_func
     )
 
